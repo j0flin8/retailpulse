@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: retailpulse_db
+    environment:
+      POSTGRES_USER: retailpulse
+      POSTGRES_PASSWORD: retailpulse_pass
+      POSTGRES_DB: retailpulse
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U retailpulse"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: retailpulse_api
+    ports:
+      - "8000:8000"
+    environment:
+      DB_USER: retailpulse
+      DB_PASSWORD: retailpulse_pass
+      DB_HOST: postgres        # container name, not localhost
+      DB_PORT: 5432
+      DB_NAME: retailpulse
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app                 # hot reload during development
+
+volumes:
+  pgdata:
