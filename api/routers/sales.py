@@ -105,55 +105,65 @@ def get_customer_history(customer_id: str, db: Session = Depends(get_db)):
 @router.post("/ingest", response_model=IngestSaleResponse, status_code=201)
 def ingest_sale(payload: IngestSaleRequest, db: Session = Depends(get_db)):
     """Accept and insert a new validated sale record."""
-    revenue = round(payload.quantity * payload.unit_price, 2)
 
-    # Upsert dim_product if new
-    db.execute(text("""
-        INSERT INTO dim_product (stock_code, description)
-        VALUES (:sc, :desc)
-        ON CONFLICT (stock_code) DO NOTHING
-    """), {"sc": payload.stock_code, "desc": payload.description})
+    # Compute all derived values BEFORE the transaction block
+    revenue   = round(payload.quantity * payload.unit_price, 2)
+    is_guest  = payload.customer_id == "GUEST"
+    date_key  = int(payload.invoice_date.strftime("%Y%m%d"))
 
-    # Upsert dim_customer if new
-    is_guest = payload.customer_id == "GUEST"
-    db.execute(text("""
-        INSERT INTO dim_customer (customer_id, country, is_guest)
-        VALUES (:cid, :country, :guest)
-        ON CONFLICT (customer_id) DO NOTHING
-    """), {"cid": payload.customer_id, "country": payload.country, "guest": is_guest})
-
-    # Insert fact row
-    date_key = db.execute(text("""
-                INSERT INTO dim_date
+    with db.begin():
+        # 1. Upsert dim_date
+        db.execute(text("""
+            INSERT INTO dim_date
                 (date_key, full_date, year, month, day, quarter, day_of_week, week_of_year)
+            VALUES
+                (:dk, :fd, :year, :month, :day, :quarter, :dow, :week)
+            ON CONFLICT (date_key) DO NOTHING
+        """), {
+            "dk":    date_key,
+            "fd":    payload.invoice_date.date(),
+            "year":  payload.invoice_date.year,
+            "month": payload.invoice_date.month,
+            "day":   payload.invoice_date.day,
+            "quarter": ((payload.invoice_date.month - 1) // 3) + 1,
+            "dow":   payload.invoice_date.weekday(),
+            "week":  payload.invoice_date.isocalendar()[1]
+        })
 
-                VALUES
+        # 2. Upsert dim_product
+        db.execute(text("""
+            INSERT INTO dim_product (stock_code, description)
+            VALUES (:sc, :desc)
+            ON CONFLICT (stock_code) DO NOTHING
+        """), {"sc": payload.stock_code, "desc": payload.description})
 
-                (
-                :dk,
-                :fd,
-                :year,
-                :month,
-                :day,
-                :quarter,
-                :dow,
-                :week
-                )
+        # 3. Upsert dim_customer
+        db.execute(text("""
+            INSERT INTO dim_customer (customer_id, country, is_guest)
+            VALUES (:cid, :country, :guest)
+            ON CONFLICT (customer_id) DO NOTHING
+        """), {"cid": payload.customer_id, "country": payload.country, "guest": is_guest})
 
-                ON CONFLICT (date_key)
-
-                DO NOTHING
-                """),
-                {
-                "dk": date_key,
-                "fd": payload.invoice_date.date(),
-                "year": payload.invoice_date.year,
-                "month": payload.invoice_date.month,
-                "day": payload.invoice_date.day,
-                "quarter": ((payload.invoice_date.month-1)//3)+1,
-                "dow": payload.invoice_date.weekday(),
-                "week": payload.invoice_date.isocalendar()[1]
-                })
+        # 4. Insert fact row
+        db.execute(text("""
+            INSERT INTO fact_sales
+                (invoice_no, stock_code, customer_id, date_key, invoice_date,
+                 quantity, unit_price, revenue, country, is_cancelled, is_return, is_guest)
+            VALUES
+                (:inv, :sc, :cid, :dk, :dt,
+                 :qty, :price, :rev, :country, FALSE, FALSE, :guest)
+        """), {
+            "inv":     payload.invoice_no,
+            "sc":      payload.stock_code,
+            "cid":     payload.customer_id,
+            "dk":      date_key,
+            "dt":      payload.invoice_date,
+            "qty":     payload.quantity,
+            "price":   payload.unit_price,
+            "rev":     revenue,
+            "country": payload.country,
+            "guest":   is_guest
+        })
 
     return IngestSaleResponse(
         message="Sale record ingested successfully",
