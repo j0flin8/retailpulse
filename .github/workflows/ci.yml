@@ -11,6 +11,13 @@ jobs:
     name: Lint & Test
     runs-on: ubuntu-latest
 
+    env:
+    AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+    AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    AWS_REGION: ${{ secrets.AWS_REGION }}
+    S3_BUCKET: ${{ secrets.S3_BUCKET }}
+    S3_KEY: ${{ secrets.S3_KEY }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
